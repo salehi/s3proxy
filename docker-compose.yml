@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  s3-proxy:
+    image: s4l3h1/s3proxy:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
+      - AWS_SECRET_KEY=${AWS_SECRET_KEY}
+      - ORIGIN_DOMAIN=${ORIGIN_DOMAIN:-s3.example.com}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - PORT=8000
+    restart: unless-stopped

@@ -1,0 +1,19 @@
+[tool.poetry]
+package-mode = false
+name = "S3SignReverseProxy"
+version = "5.0.0"
+description = "S3 Sign Reverse Proxy"
+authors = ["Salehi <salehi1994@gmail.com>"]
+license = "PRIVATE"
+
+
+[tool.poetry.dependencies]
+python = "^3.12"
+starlette = "^0.47.2"
+httpx = "^0.28.1"
+uvicorn = "^0.35.0"
+uwsgi = "^2.0.30"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

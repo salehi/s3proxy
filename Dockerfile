@@ -6,11 +6,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies including build tools for uWSGI
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
 # Set work directory
 WORKDIR /app
 
@@ -31,5 +26,4 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Run the application with uwsgi
-CMD ["uwsgi", "--http", ":8000", "--wsgi-file", "main.py", "--callable", "app", "--master", "--processes", "4"]
+CMD ["python", "main.py"]

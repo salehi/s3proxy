@@ -50,7 +50,7 @@ git clone https://github.com/salehi/s3proxy.git
 cd s3proxy
 
 # Install dependencies
-poetry install
+pip install -r requirements.txt
 ```
 
 ## Configuration

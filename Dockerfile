@@ -11,22 +11,14 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN pip install poetry
-
-# Configure Poetry: Don't create virtual environment, install dependencies globally
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
-
 # Set work directory
 WORKDIR /app
 
 # Copy Poetry files
-COPY pyproject.toml poetry.lock* ./
+COPY requirements.txt ./
 
 # Install dependencies
-RUN poetry install --only=main && rm -rf $POETRY_CACHE_DIR
+RUN pip install -r requirements.txt
 
 # Copy application code
 COPY . .

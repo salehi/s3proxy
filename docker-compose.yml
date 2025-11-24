@@ -1,13 +1,35 @@
-version: '3.8'
 services:
-  s3-proxy:
+  s3-proxy-serverA:
     image: s4l3h1/s3proxy:latest
+    environment:
+      - CLIENT_ACCESS_KEY=${CLIENT_ACCESS_KEY}
+      - CLIENT_SECRET_KEY=${CLIENT_SECRET_KEY}
+      - ORIGIN_ACCESS_KEY=${SERVERA_ACCESS_KEY}
+      - ORIGIN_SECRET_KEY=${SERVERA_SECRET_KEY}
+      - ORIGIN_DOMAIN=${SERVERA_ENDPOINT}
+      - AWS_REGION=us-east-1
+      - PORT=8000
+    restart: unless-stopped
+
+  s3-proxy-serverB:
+    image: s4l3h1/s3proxy:latest
+    environment:
+      - CLIENT_ACCESS_KEY=${CLIENT_ACCESS_KEY}
+      - CLIENT_SECRET_KEY=${CLIENT_SECRET_KEY}
+      - ORIGIN_ACCESS_KEY=${SERVERB_ACCESS_KEY}
+      - ORIGIN_SECRET_KEY=${SERVERB_SECRET_KEY}
+      - ORIGIN_DOMAIN=${SERVERB_ENDPOINT}
+      - AWS_REGION=us-east-1
+      - PORT=8000
+    restart: unless-stopped
+
+  haproxy:
+    image: haproxy:2.9-alpine
     ports:
       - "8000:8000"
-    environment:
-      - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
-      - AWS_SECRET_KEY=${AWS_SECRET_KEY}
-      - ORIGIN_DOMAIN=${ORIGIN_DOMAIN:-s3.example.com}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - PORT=8000
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - s3-proxy-serverA
+      - s3-proxy-serverB
     restart: unless-stopped

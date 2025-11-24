@@ -14,8 +14,14 @@ from starlette.routing import Route
 from sign_s3 import generate_presigned_url_v4
 
 # Configuration
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY", "your_access_key_here")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY", "your_secret_key_here")
+# Client-facing credentials (what clients use to sign requests to this proxy)
+CLIENT_ACCESS_KEY = os.getenv("CLIENT_ACCESS_KEY", "your_client_access_key_here")
+CLIENT_SECRET_KEY = os.getenv("CLIENT_SECRET_KEY", "your_client_secret_key_here")
+
+# Origin credentials (what this proxy uses to sign requests to S3)
+ORIGIN_ACCESS_KEY = os.getenv("ORIGIN_ACCESS_KEY", "your_origin_access_key_here")
+ORIGIN_SECRET_KEY = os.getenv("ORIGIN_SECRET_KEY", "your_origin_secret_key_here")
+
 ORIGIN_DOMAIN = os.getenv("ORIGIN_DOMAIN", "s3.example.com")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 PORT = int(os.getenv("PORT", "8000"))
@@ -54,9 +60,9 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
     def verify_signature(self, request, query_params):
         """Verify the AWS Signature V4"""
 
-        # Check if access key matches
+        # Check if access key matches CLIENT credentials
         credential = query_params.get('X-Amz-Credential', [''])[0]
-        if not credential.startswith(AWS_ACCESS_KEY):
+        if not credential.startswith(CLIENT_ACCESS_KEY):
             return False
 
         # Extract signature components
@@ -124,7 +130,7 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
         def sign(key, msg):
             return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
 
-        kDate = sign(('AWS4' + AWS_SECRET_KEY).encode('utf-8'), date_stamp)
+        kDate = sign(('AWS4' + CLIENT_SECRET_KEY).encode('utf-8'), date_stamp)
         kRegion = sign(kDate, AWS_REGION)
         kService = sign(kRegion, 's3')
         kSigning = sign(kService, 'aws4_request')
@@ -159,9 +165,9 @@ def validate_and_resign_url(request):
     if 'X-Amz-Signature' not in query_params:
         return request.url.query  # Not a signed request, pass through
 
-    # Verify the access key matches
+    # Verify the access key matches CLIENT credentials
     credential = query_params.get('X-Amz-Credential', [''])[0]
-    if not credential.startswith(AWS_ACCESS_KEY):
+    if not credential.startswith(CLIENT_ACCESS_KEY):
         raise ValueError("Access key mismatch")
 
     # Extract bucket and object from path
@@ -175,11 +181,11 @@ def validate_and_resign_url(request):
     expires_str = query_params.get('X-Amz-Expires', ['3600'])[0]
     expires_in = int(expires_str)
 
-    # Generate new presigned URL using the imported function
+    # Generate new presigned URL using ORIGIN credentials
     new_url = generate_presigned_url_v4(
         endpoint=f"https://{ORIGIN_DOMAIN}",
-        access_key=AWS_ACCESS_KEY,
-        secret_key=AWS_SECRET_KEY,
+        access_key=ORIGIN_ACCESS_KEY,
+        secret_key=ORIGIN_SECRET_KEY,
         bucket=bucket,
         object_key=object_key,
         expires_in=expires_in,

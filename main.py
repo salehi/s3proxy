@@ -232,12 +232,21 @@ async def proxy_handler(request):
 
 
 async def health_check(request):
-    return JSONResponse({"status": "healthy"})
+    """Check if origin server is responding"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.head(f"https://{ORIGIN_DOMAIN}")
+            if 200 <= response.status_code < 300:
+                return JSONResponse({"status": "ok"}, status_code=200)
+    except Exception:
+        pass
+
+    return JSONResponse({"status": "nok"}, status_code=450)
 
 
 # Routes
 routes = [
-    Route("/health", health_check, methods=["GET"]),
+    Route("/healthz", health_check, methods=["GET"]),
     Route("/{path:path}", proxy_handler, methods=["GET", "POST", "PUT", "DELETE", "HEAD"])
 ]
 

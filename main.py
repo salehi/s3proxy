@@ -11,7 +11,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import StreamingResponse, JSONResponse
 from starlette.routing import Route
 
-from sign_s3 import generate_presigned_url_v4
+from sign_s3 import generate_presigned_url_v4, generate_presigned_url_v2
+from signature_helpers import calculate_signature_v4, calculate_signature_v2
 
 # Configuration
 # Client-facing credentials (what clients use to sign requests to this proxy)
@@ -23,8 +24,19 @@ ORIGIN_ACCESS_KEY = os.getenv("ORIGIN_ACCESS_KEY", "your_origin_access_key_here"
 ORIGIN_SECRET_KEY = os.getenv("ORIGIN_SECRET_KEY", "your_origin_secret_key_here")
 
 ORIGIN_DOMAIN = os.getenv("ORIGIN_DOMAIN", "s3.example.com")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+ORIGIN_SCHEME = os.getenv("ORIGIN_SCHEME", "https")
 PORT = int(os.getenv("PORT", "8000"))
+
+
+def detect_signature_version(query_params):
+    """Detect signature version from query parameters
+
+    Returns:
+        tuple: (is_v4, is_v2) booleans
+    """
+    is_v4 = 'X-Amz-Signature' in query_params
+    is_v2 = 'Signature' in query_params and 'AWSAccessKeyId' in query_params
+    return is_v4, is_v2
 
 
 class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
@@ -37,17 +49,27 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
         # Parse query parameters
         query_params = parse_query_params(request.url.query)
 
+        # Detect signature version
+        is_v4, is_v2 = detect_signature_version(query_params)
+
         # Skip verification for non-signed requests (pass through)
-        if 'X-Amz-Signature' not in query_params:
+        if not is_v4 and not is_v2:
             return await call_next(request)
 
         # Verify AWS signature
         try:
-            if not self.verify_signature(request, query_params):
-                return JSONResponse(
-                    {"error": "Invalid AWS signature"},
-                    status_code=403
-                )
+            if is_v4:
+                if not self.verify_signature_v4(request, query_params):
+                    return JSONResponse(
+                        {"error": "Invalid AWS signature V4"},
+                        status_code=403
+                    )
+            elif is_v2:
+                if not self.verify_signature_v2(request, query_params):
+                    return JSONResponse(
+                        {"error": "Invalid AWS signature V2"},
+                        status_code=403
+                    )
         except Exception as e:
             return JSONResponse(
                 {"error": f"Signature verification failed: {str(e)}"},
@@ -57,7 +79,7 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
         # Signature is valid, proceed with request
         return await call_next(request)
 
-    def verify_signature(self, request, query_params):
+    def verify_signature_v4(self, request, query_params):
         """Verify the AWS Signature V4"""
 
         # Check if access key matches CLIENT credentials
@@ -79,7 +101,7 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
 
         # Calculate expected signature with the incoming host
         incoming_host = request.headers.get('host', '')
-        expected_signature = self.calculate_signature(
+        expected_signature = self.calculate_signature_v4(
             method=request.method,
             host=incoming_host,
             path=request.url.path,
@@ -92,11 +114,11 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
         # Compare signatures
         return hmac.compare_digest(provided_signature, expected_signature)
 
-    def calculate_signature(self, method, host, path, query_params, headers, amz_date, signed_headers):
+    def calculate_signature_v4(self, method, host, path, query_params, headers, amz_date, signed_headers):
         """Calculate AWS Signature V4"""
 
         date_stamp = amz_date[:8]
-        credential_scope = f"{date_stamp}/{AWS_REGION}/s3/aws4_request"
+        credential_scope = f"{date_stamp}//s3/aws4_request"
 
         # Create canonical query string (exclude signature)
         canonical_querystring_parts = []
@@ -122,21 +144,43 @@ class AWSSignatureVerificationMiddleware(BaseHTTPMiddleware):
         payload_hash = "UNSIGNED-PAYLOAD"
         canonical_request = f"{method}\n{path}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
-        # String to sign
-        algorithm = 'AWS4-HMAC-SHA256'
-        string_to_sign = f"{algorithm}\n{amz_date}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+        # Use helper function from signature_helpers
+        return calculate_signature_v4(CLIENT_SECRET_KEY, date_stamp, amz_date, credential_scope, canonical_request, '')
 
-        # Calculate signature
-        def sign(key, msg):
-            return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+    def verify_signature_v2(self, request, query_params):
+        """Verify AWS Signature V2"""
 
-        kDate = sign(('AWS4' + CLIENT_SECRET_KEY).encode('utf-8'), date_stamp)
-        kRegion = sign(kDate, AWS_REGION)
-        kService = sign(kRegion, 's3')
-        kSigning = sign(kService, 'aws4_request')
+        # Check if access key matches CLIENT credentials
+        access_key_id = query_params.get('AWSAccessKeyId', [''])[0]
+        if access_key_id != CLIENT_ACCESS_KEY:
+            return False
 
-        signature = hmac.new(kSigning, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-        return signature
+        provided_signature = query_params.get('Signature', [''])[0]
+        expires = query_params.get('Expires', [''])[0]
+
+        if not all([provided_signature, expires]):
+            return False
+
+        # Calculate expected signature
+        expected_signature = self.calculate_signature_v2(
+            request.url.path,
+            expires
+        )
+
+        # Compare signatures
+        return hmac.compare_digest(provided_signature, expected_signature)
+
+    def calculate_signature_v2(self, path, expires):
+        """Calculate AWS Signature V2"""
+        # Extract bucket and object from path
+        path_parts = path.strip('/').split('/', 1)
+        if len(path_parts) < 2:
+            bucket, object_key = path_parts[0], ''
+        else:
+            bucket, object_key = path_parts[0], path_parts[1]
+
+        # Use helper function from signature_helpers
+        return calculate_signature_v2(CLIENT_SECRET_KEY, bucket, object_key, expires)
 
 
 def parse_query_params(query_string):
@@ -161,14 +205,12 @@ def validate_and_resign_url(request):
     # Parse query parameters
     query_params = parse_query_params(request.url.query)
 
-    # Check if this is a signed request
-    if 'X-Amz-Signature' not in query_params:
-        return request.url.query  # Not a signed request, pass through
+    # Detect signature version
+    is_v4, is_v2 = detect_signature_version(query_params)
 
-    # Verify the access key matches CLIENT credentials
-    credential = query_params.get('X-Amz-Credential', [''])[0]
-    if not credential.startswith(CLIENT_ACCESS_KEY):
-        raise ValueError("Access key mismatch")
+    # Not a signed request, pass through
+    if not is_v4 and not is_v2:
+        return request.url.query
 
     # Extract bucket and object from path
     path_parts = request.url.path.strip('/').split('/', 1)
@@ -177,20 +219,53 @@ def validate_and_resign_url(request):
 
     bucket, object_key = path_parts[0], path_parts[1]
 
-    # Extract expires from original request
-    expires_str = query_params.get('X-Amz-Expires', ['3600'])[0]
-    expires_in = int(expires_str)
+    # Handle V4 signature
+    if is_v4:
+        # Verify the access key matches CLIENT credentials
+        credential = query_params.get('X-Amz-Credential', [''])[0]
+        if not credential.startswith(CLIENT_ACCESS_KEY):
+            raise ValueError("Access key mismatch")
 
-    # Generate new presigned URL using ORIGIN credentials
-    new_url = generate_presigned_url_v4(
-        endpoint=f"https://{ORIGIN_DOMAIN}",
-        access_key=ORIGIN_ACCESS_KEY,
-        secret_key=ORIGIN_SECRET_KEY,
-        bucket=bucket,
-        object_key=object_key,
-        expires_in=expires_in,
-        region=AWS_REGION
-    )
+        # Extract expires from original request
+        expires_str = query_params.get('X-Amz-Expires', ['3600'])[0]
+        expires_in = int(expires_str)
+
+        # Generate new presigned URL using V4 (same as client)
+        new_url = generate_presigned_url_v4(
+            endpoint=f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}",
+            access_key=ORIGIN_ACCESS_KEY,
+            secret_key=ORIGIN_SECRET_KEY,
+            bucket=bucket,
+            object_key=object_key,
+            expires_in=expires_in,
+            region='',
+            scheme=ORIGIN_SCHEME
+        )
+
+    # Handle V2 signature
+    elif is_v2:
+        # Verify the access key matches CLIENT credentials
+        access_key_id = query_params.get('AWSAccessKeyId', [''])[0]
+        if access_key_id != CLIENT_ACCESS_KEY:
+            raise ValueError("Access key mismatch")
+
+        # Extract expires from original request
+        expires_str = query_params.get('Expires', [''])[0]
+        import time
+        current_timestamp = int(time.time())
+        expires_timestamp = int(expires_str)
+        expires_in = max(expires_timestamp - current_timestamp, 60)  # At least 60 seconds
+
+        # Generate new presigned URL using V2 (same as client)
+        new_url = generate_presigned_url_v2(
+            endpoint=f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}",
+            access_key=ORIGIN_ACCESS_KEY,
+            secret_key=ORIGIN_SECRET_KEY,
+            bucket=bucket,
+            object_key=object_key,
+            expires_in=expires_in,
+            scheme=ORIGIN_SCHEME
+        )
 
     # Extract just the query string from the new URL
     parsed_url = urllib.parse.urlparse(new_url)
@@ -204,7 +279,7 @@ async def proxy_handler(request):
         new_query_string = validate_and_resign_url(request)
 
         # Build target URL
-        target_url = f"https://{ORIGIN_DOMAIN}{request.url.path}"
+        target_url = f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}{request.url.path}"
         if new_query_string:
             target_url += f"?{new_query_string}"
 
@@ -241,7 +316,7 @@ async def health_check(request):
     """Check if origin server is responding"""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.head(f"https://{ORIGIN_DOMAIN}")
+            response = await client.head(f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}")
             if 200 <= response.status_code < 300:
                 return JSONResponse({"status": "ok"}, status_code=200)
     except Exception:

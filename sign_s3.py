@@ -1,26 +1,18 @@
 import argparse
-import base64
 import hashlib
-import hmac
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlencode
 
+from signature_helpers import calculate_signature_v2, calculate_signature_v4
 
-def generate_presigned_url_v2(endpoint, access_key, secret_key, bucket, object_key, expires_in):
+
+def generate_presigned_url_v2(endpoint, access_key, secret_key, bucket, object_key, expires_in, scheme='https'):
     """AWS Signature Version 2"""
     if not endpoint.startswith('http'):
-        endpoint = f'https://{endpoint}'
+        endpoint = f'{scheme}://{endpoint}'
 
     expiration = int((datetime.utcnow() + timedelta(seconds=expires_in)).timestamp())
-    string_to_sign = f"GET\n\n\n{expiration}\n/{bucket}/{object_key}"
-
-    signature = hmac.new(
-        secret_key.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.sha1
-    ).digest()
-
-    signature_b64 = base64.b64encode(signature).decode('utf-8')
+    signature_b64 = calculate_signature_v2(secret_key, bucket, object_key, expiration)
 
     url = f"{endpoint}/{bucket}/{quote(object_key, safe='/')}"
     params = {
@@ -32,10 +24,11 @@ def generate_presigned_url_v2(endpoint, access_key, secret_key, bucket, object_k
     return f"{url}?{urlencode(params)}"
 
 
-def generate_presigned_url_v4(endpoint, access_key, secret_key, bucket, object_key, expires_in, region='us-east-1'):
+def generate_presigned_url_v4(endpoint, access_key, secret_key, bucket, object_key, expires_in, region='us-east-1',
+                              scheme='https'):
     """AWS Signature Version 4"""
     if not endpoint.startswith('http'):
-        endpoint = f'https://{endpoint}'
+        endpoint = f'{scheme}://{endpoint}'
 
     # Parse endpoint for host
     from urllib.parse import urlparse
@@ -68,21 +61,8 @@ def generate_presigned_url_v4(endpoint, access_key, secret_key, bucket, object_k
 
     canonical_request = f"GET\n{canonical_uri}\n{canonical_querystring}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
-    # String to sign
-    algorithm = 'AWS4-HMAC-SHA256'
-    string_to_sign = f"{algorithm}\n{timestamp}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode()).hexdigest()}"
-
-    # Signing key
-    def sign(key, msg):
-        return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
-
-    kDate = sign(('AWS4' + secret_key).encode('utf-8'), datestamp)
-    kRegion = sign(kDate, region)
-    kService = sign(kRegion, 's3')
-    kSigning = sign(kService, 'aws4_request')
-
-    # Signature
-    signature = hmac.new(kSigning, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+    # Calculate signature using helper
+    signature = calculate_signature_v4(secret_key, datestamp, timestamp, credential_scope, canonical_request, region)
 
     # Final URL
     params['X-Amz-Signature'] = signature

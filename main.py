@@ -25,6 +25,9 @@ ORIGIN_SECRET_KEY = os.getenv("ORIGIN_SECRET_KEY", "your_origin_secret_key_here"
 
 ORIGIN_DOMAIN = os.getenv("ORIGIN_DOMAIN", "s3.example.com")
 ORIGIN_SCHEME = os.getenv("ORIGIN_SCHEME", "https")
+ORIGIN_HEALTH_PATH = os.getenv("ORIGIN_HEALTH_PATH", "/")
+
+
 PORT = int(os.getenv("PORT", "8000"))
 
 
@@ -316,7 +319,7 @@ async def health_check(request):
     """Check if origin server is responding"""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.head(f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}")
+            response = await client.head(f"{ORIGIN_SCHEME}://{ORIGIN_DOMAIN}/{ORIGIN_HEALTH_PATH}")
             if 200 <= response.status_code < 300:
                 return JSONResponse({"status": "ok"}, status_code=200)
     except Exception:

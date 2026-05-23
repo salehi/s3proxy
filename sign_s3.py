@@ -81,18 +81,19 @@ def main():
     parser.add_argument('--expires', '-e', type=int, default=3600, help='Expiration time in seconds (default: 3600)')
     parser.add_argument('--version', '-v', choices=['2', '4'], default='2', help='Signature version (default: 2)')
     parser.add_argument('--region', '-r', default='us-east-1', help='AWS region for v4 (default: us-east-1)')
+    parser.add_argument('--scheme', '-s', choices=['http', 'https'], default='https', help='URL scheme (default: https)')
 
     args = parser.parse_args()
 
     if args.version == '2':
         url = generate_presigned_url_v2(
             args.endpoint, args.access_key, args.secret_key,
-            args.bucket, args.object_key, args.expires
+            args.bucket, args.object_key, args.expires, args.scheme
         )
     elif args.version == '4':
         url = generate_presigned_url_v4(
             args.endpoint, args.access_key, args.secret_key,
-            args.bucket, args.object_key, args.expires, args.region
+            args.bucket, args.object_key, args.expires, args.region, args.scheme
         )
 
     print(url)
